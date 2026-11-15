@@ -69,20 +69,23 @@ export type Employee = { id:string; name:string; phone:string; active:number; st
 export type Application = { id:string; shift_id:string; employee_id:string; name:string; phone:string; store_name:string; role:string; starts_at:string; ends_at:string; status:string };
 export function snapshot() {
   const conn=db();
-  const employees=conn.prepare('SELECT * FROM shifts_employees ORDER BY name').all() as Omit<Employee,'store_ids'>[];
-  const links=conn.prepare('SELECT * FROM shifts_employee_stores').all() as {employee_id:string;store_id:string}[];
+  // node:sqlite returns null-prototype records. React Server Components require
+  // ordinary serializable objects when passing this snapshot to the dashboard.
+  const rows=(sql:string)=>conn.prepare(sql).all().map(row=>({...row}));
+  const employees=rows('SELECT * FROM shifts_employees ORDER BY name') as Omit<Employee,'store_ids'>[];
+  const links=rows('SELECT * FROM shifts_employee_stores') as {employee_id:string;store_id:string}[];
   return {
-    stores: conn.prepare('SELECT * FROM shifts_stores ORDER BY name').all() as {id:string;name:string;address:string}[],
+    stores: rows('SELECT * FROM shifts_stores ORDER BY name') as {id:string;name:string;address:string}[],
     employees: employees.map(e=>({...e,store_ids:links.filter(l=>l.employee_id===e.id).map(l=>l.store_id)})),
-    shifts: conn.prepare(`SELECT t.*,s.name store_name,
+    shifts: rows(`SELECT t.*,s.name store_name,
       (SELECT count(*) FROM shifts_assignments a WHERE a.shift_id=t.id) assigned,
       (SELECT count(*) FROM shifts_applications a WHERE a.shift_id=t.id AND a.status='pending') pending
-      FROM shifts_turns t JOIN shifts_stores s ON s.id=t.store_id ORDER BY starts_at`).all() as Shift[],
-    applications: conn.prepare(`SELECT a.*,e.name,e.phone,s.name store_name,t.role,t.starts_at,t.ends_at FROM shifts_applications a
+      FROM shifts_turns t JOIN shifts_stores s ON s.id=t.store_id ORDER BY starts_at`) as Shift[],
+    applications: rows(`SELECT a.*,e.name,e.phone,s.name store_name,t.role,t.starts_at,t.ends_at FROM shifts_applications a
       JOIN shifts_employees e ON e.id=a.employee_id JOIN shifts_turns t ON t.id=a.shift_id JOIN shifts_stores s ON s.id=t.store_id
-      ORDER BY a.created_at DESC`).all() as Application[],
-    assignments: conn.prepare('SELECT a.*,e.name FROM shifts_assignments a JOIN shifts_employees e ON e.id=a.employee_id').all() as {id:string;shift_id:string;employee_id:string;name:string}[],
-    events: conn.prepare('SELECT * FROM shifts_events ORDER BY created_at DESC LIMIT 50').all() as {id:string;message:string;created_at:string}[],
+      ORDER BY a.created_at DESC`) as Application[],
+    assignments: rows('SELECT a.*,e.name FROM shifts_assignments a JOIN shifts_employees e ON e.id=a.employee_id') as {id:string;shift_id:string;employee_id:string;name:string}[],
+    events: rows('SELECT * FROM shifts_events ORDER BY created_at DESC LIMIT 50') as {id:string;message:string;created_at:string}[],
     settings: { adminPhone:setting('admin_phone'), session:setting('openwa_session'), configured:!!setting('admin_phone')&&!!setting('openwa_session') },
   };
 }

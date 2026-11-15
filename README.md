@@ -90,7 +90,9 @@ The login screen supports resending confirmation and password recovery. In **Sup
 - `http://localhost:3000/auth/callback`
 - The equivalent exact HTTPS URLs for your deployed app.
 
-Set `APP_ORIGIN` to the public HTTPS origin behind a reverse proxy. Recovery uses PKCE: open the recovery link in the same browser that requested it. A valid recovery session can set a new password of at least 12 characters at `/auth/password`. No arbitrary redirect target is accepted. Outbound recovery/confirmation email delivery depends on the project's SMTP configuration and limits.
+Set `APP_ORIGIN` to the public HTTPS origin behind a reverse proxy. Start recovery at `/auth/recover` without entering the old password. Recovery uses PKCE: open the recovery link in the same browser/hostname that requested it (do not switch between `localhost` and `127.0.0.1`). At `/auth/callback`, click **Continuar y crear contraseña**; opening or prefetching the page alone does not consume the code. The callback also accepts recovery token-hash links and legacy fragment-based recovery links; credentials are removed from browser history and verified on the server before establishing HTTP-only cookies. If Supabase falls back to the root Site URL, the application forwards recovery parameters to this callback instead of silently discarding them.
+
+A valid administrator session can set a new password of at least 12 characters at `/auth/password`. The form displays an explicit success message and link to the calendar. Consumed/expired links, missing PKCE verifiers, password-policy errors, and email quotas have distinct messages. No arbitrary redirect target is accepted. Outbound recovery/confirmation email delivery depends on the project's SMTP configuration and limits. The default test email service may allow only **2 emails per hour**; HTTP 429 requires waiting for quota to replenish or configuring custom SMTP in Supabase Auth. Repeatedly requesting links does not bypass that limit. Never reset passwords through direct writes to the managed `auth.users` table.
 
 **Scope:** this change moves authentication to Supabase. Stores, employees, turns, invitations, applications, assignments, events, and settings still use SQLite until their separate PostgreSQL migration. The Mastra and OpenWA storage configurations are unchanged.
 
@@ -117,6 +119,8 @@ Mastra's custom `/internal/shift-chat` route and the web `/api/internal` route u
 - Calendar input and display use the browser's local timezone. WhatsApp messages use `SHIFTS_TIMEZONE`; use the same zone on administrator devices for this MVP.
 
 Verification commands: `npm run test:turnos`, `npm run test:web`, `npm --prefix apps/web run typecheck`, `npm run build:web`, and `npm run build` for Mastra. `test:web` uses an isolated SQLite database and local Supabase Auth/OpenWA stubs, including tests against forged sessions and non-admin users; it does not send real emails or WhatsApp messages.
+
+The integration test also covers recovery request → token verification → password change → logout → rejection of the old password → login with the new password, plus link replay, other-user rejection and email rate limits. To include the mobile browser flow, set `BROWSER_EXECUTABLE_PATH` to an installed Chromium-compatible browser when running `npm run test:web` (it uses the Puppeteer dependency in `apps/openwa`). SQLite snapshot rows are normalized to plain objects before passing them to React Server Components; regression tests cover populated databases, not only empty dashboards.
 
 ## Run the complete project in Daytona
 
@@ -174,6 +178,9 @@ sessions. If provisioning fails, the sandbox ID is saved immediately for inspect
 recovery or deletion in Daytona. Use `npm run daytona:resume` to retry incomplete provisioning in
 that same sandbox; do not rerun deployment expecting it to create another sandbox. Resume overlays
 application sources and repeats dependency installation/builds without copying local databases or sessions.
+The source archive is cached in `.daytona/source.tar.gz`; subsequent resumes reuse that exact
+archive and skip remote chunks whose SHA-256 matches. To deploy a different source revision after
+an interrupted setup, deliberately replace that cached archive rather than expecting resume to refresh it.
 
 `npm run test:daytona` tests the source-upload exclusion rules. A real cloud run requires your
 Daytona credentials and quota; local checks alone do not verify QR pairing or WhatsApp delivery.

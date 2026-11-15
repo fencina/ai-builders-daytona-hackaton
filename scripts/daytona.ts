@@ -42,20 +42,37 @@ async function run(sandbox: Sandbox, cmd: string, timeout = 1200) {
   return response;
 }
 async function upload(sandbox: Sandbox, source: Buffer, destination: string) {
-  // Small uploads work reliably where long multipart streams are reset by the proxy.
-  const chunkSize = 64 * 1024;
+  // Keep credential/config files on the filesystem API, out of command arguments.
+  // Transfer the source archive over the execution API when multipart uploads stall.
+  const chunkSize = 32 * 1024;
   if (source.length <= chunkSize) {
     await sandbox.fs.uploadFile(source, destination, 30);
     return;
   }
-  const prefix = `/tmp/turno-upload-${randomUUID()}`;
+  const digest = createHash('sha256').update(source).digest('hex');
+  const prefix = `/tmp/turno-upload-${digest}`;
   const parts: string[] = [];
+  const inspect = `import glob,hashlib,json; print(json.dumps({p:hashlib.sha256(open(p,"rb").read()).hexdigest() for p in glob.glob(${JSON.stringify(prefix + '-[0-9]*')})}))`;
+  const checkpoint = await run(sandbox, `python3 -c '${inspect}'`, 60);
+  const completed: Record<string, string> = JSON.parse(checkpoint.result.trim());
   for (let offset = 0; offset < source.length; offset += chunkSize) {
     const part = `${prefix}-${parts.length}`;
-    await sandbox.fs.uploadFile(source.subarray(offset, offset + chunkSize), part, 30);
+    const chunk = source.subarray(offset, offset + chunkSize);
+    const payload = chunk.toString('base64');
+    const write = `import base64; open(${JSON.stringify(part)},"wb").write(base64.b64decode(${JSON.stringify(payload)}))`;
+    if (completed[part] !== createHash('sha256').update(chunk).digest('hex')) {
+      for (let attempt = 1; ; attempt++) {
+        try { await run(sandbox, `python3 -c '${write}'`, 60); break; }
+        catch (error) {
+          if (!(error instanceof DaytonaError) || attempt >= 3) throw error;
+          // Rewriting this exact chunk is idempotent even if the response was lost.
+          await delay(2000 * attempt);
+        }
+      }
+    }
     parts.push(part);
+    if (parts.length % 25 === 0) console.log(`Source transfer: ${Math.min(offset + chunkSize, source.length)}/${source.length} bytes.`);
   }
-  const digest = createHash('sha256').update(source).digest('hex');
   const code = `import hashlib,os; parts=${JSON.stringify(parts)}; payload=b"".join(open(p,"rb").read() for p in parts); assert hashlib.sha256(payload).hexdigest()==${JSON.stringify(digest)}, "Upload checksum mismatch"; target=${JSON.stringify(prefix + '-complete')}; open(target,"wb").write(payload); os.replace(target,${JSON.stringify(destination)}); [os.unlink(p) for p in parts]`;
   const quoted = "'" + code.replaceAll("'", "'\\''") + "'";
   await run(sandbox, `python3 -c ${quoted}`, 60);
@@ -139,7 +156,13 @@ try {
         const target = path.join(staging, file); mkdirSync(path.dirname(target), { recursive: true }); copyFileSync(source, target);
       }
       const archive = path.join(temporary, 'source.tar.gz');
-      execFileSync('tar', ['-czf', archive, '-C', staging, '.']);
+      const cachedArchive = path.join(root, '.daytona/source.tar.gz');
+      if (command === 'resume' && existsSync(cachedArchive)) {
+        copyFileSync(cachedArchive, archive);
+      } else {
+        execFileSync('tar', ['-czf', archive, '-C', staging, '.']);
+        copyFileSync(archive, cachedArchive);
+      }
       console.log('Uploading application source archive.');
       await upload(sandbox, readFileSync(archive), '/tmp/turno-source.tar.gz');
       console.log('Extracting application sources.');

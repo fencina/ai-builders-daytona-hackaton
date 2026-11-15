@@ -3,7 +3,7 @@ import { createServerClient } from '@supabase/ssr';
 import { cookies } from 'next/headers';
 import { authConfig } from './config';
 
-// Each request gets its own client. Tokens never enter browser JavaScript.
+// Each request gets its own client. Persistent session tokens are HTTP-only.
 export async function createSupabaseServerClient() {
   const {url,key}=authConfig();
   const jar=await cookies();

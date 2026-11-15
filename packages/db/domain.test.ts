@@ -22,3 +22,10 @@ test('rechazar no asigna y no se puede aprobar después',()=>{const aid=apply(in
 test('una invitación no se acepta dos veces',()=>{const iid=invite(shift(),employee());apply(iid);assert.throws(()=>apply(iid),/pendiente/);});
 test('candidatos excluye a empleados ya contactados',()=>{const sid=shift();const eid=employee();assert.ok(candidates(sid).some(e=>e.id===eid));invite(sid,eid);assert.ok(!candidates(sid).some(e=>e.id===eid));});
 test('no se aceptan empleados desactivados',()=>{const eid=employee();const iid=invite(shift(),eid);db().prepare('UPDATE shifts_employees SET active=0 WHERE id=?').run(eid);assert.throws(()=>apply(iid),/habilitado/);});
+test('el snapshot usa objetos planos compatibles con React Server Components',()=>{
+  const data=snapshot();
+  for(const items of [data.stores,data.employees,data.shifts,data.applications,data.assignments,data.events]){
+    assert.ok(items.length>0);
+    for(const item of items)assert.equal(Object.getPrototypeOf(item),Object.prototype);
+  }
+});

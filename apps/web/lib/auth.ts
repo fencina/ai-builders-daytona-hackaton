@@ -3,6 +3,7 @@ import { cookies } from 'next/headers';
 import { cache } from 'react';
 import { createSupabaseServerClient } from './supabase/server';
 import { adminConfig } from './supabase/config';
+import { isAdministrator } from './supabase/authorization';
 
 export const currentUser=cache(async()=>{
   if(!(await cookies()).getAll().some(c=>c.name.startsWith('sb-')&&c.name.includes('-auth-token')))return null;
@@ -12,7 +13,7 @@ export const currentUser=cache(async()=>{
   const admin=adminConfig();
   // Authentication is not authorization: only this pinned, verified identity is admin.
   // Never trust user_metadata, a username in the request, or an arbitrary authenticated user.
-  if(user.id!==admin.userId||!user.email_confirmed_at||user.email?.toLowerCase()!==admin.email)return null;
+  if(!isAdministrator(user))return null;
   return {id:user.id,username:admin.username,email:user.email};
 });
 export async function login(username:string,password:string) {
@@ -27,7 +28,7 @@ export async function login(username:string,password:string) {
     if(error.status===429)throw new Error('Demasiados intentos. Espera unos minutos e inténtalo de nuevo.');
     throw new Error('Usuario o contraseña incorrectos.');
   }
-  if(data.user.id!==admin.userId||!data.user.email_confirmed_at||data.user.email?.toLowerCase()!==admin.email){
+  if(!isAdministrator(data.user)){
     await supabase.auth.signOut({scope:'local'});
     throw new Error('Esta cuenta no tiene permisos de administrador.');
   }
