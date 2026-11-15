@@ -1,36 +1,68 @@
-# ai-builders-daytona-hackaton
+# Urgent Shift Coordinator
 
-Welcome to your new [Mastra](https://mastra.ai) project! We're excited to see what you build.
+A small Mastra agent that offers tomorrow's available shifts to employees over WhatsApp and assigns a shift after acceptance. The admin panel is separate.
 
-This starter provides you with a general-purpose Mastra agent that can research current information, manage multi-step tasks, work with local files, run approved shell commands, and create recurring schedules.
+## Run
 
-## Features
+Keep your existing `.env` and add the settings from `.env.example`:
 
-- A local `workspace/` for files and command execution (created under `src/mastra/public/workspace/` when running `mastra dev`)
-- Approval gates for file changes, deletions, and shell commands
-- Conversation memory, generated thread titles, and task tracking
-- Built-in web search and direct web page fetching
-- Recurring schedules that persist across restarts
-- Local libSQL storage and DuckDB observability, with optional Turso storage
-- A bundled Mastra skill that helps coding agents use current Mastra APIs
-
-## Get started
-
-Set your `OPENAI_API_KEY` in `.env` or in your environment, then run:
-
-```shell
-npm run dev
+```dotenv
+OPENAI_API_KEY=your-key
+BUSINESS_TIMEZONE=Asia/Tokyo
+SHIFT_POLL_ENABLED=true
+SHIFT_POLL_INTERVAL_MS=300000
+OPENWA_API_URL=http://localhost:2785/api
+OPENWA_SESSION_ID=your-connected-session-id
+OPENWA_API_KEY=your-openwa-api-key
 ```
 
-Open [http://localhost:4111](http://localhost:4111) in your browser to access [Mastra Studio](https://mastra.ai/docs/studio/overview).
+Run `npm run dev`, then open http://localhost:4111. The Shift Coordinator agent, urgent-shifts workflow, and three tools are available in Studio.
 
-Select **Agent** in Mastra Studio and try one of these prompts:
+The loop in `src/mastra/index.ts` runs once shortly after startup and every five minutes afterward. It skips overlapping ticks. Set `SHIFT_POLL_ENABLED=false` to run the workflow manually in Studio instead. This MVP assumes one agent server process.
 
-- `Get the weather forecast for Austin this weekend.`
-- `Create a landing page for a Japanese sakura festival.`
-- `Check the SPCX stock price now, then check it every minute.`
+## Flow
 
-The agent asks for approval before it changes files or runs commands. When it creates a schedule, it returns an ID that you can use to pause the schedule.
+1. Find shifts whose status is `available`, whose `employee_id` is null, and whose start date is tomorrow in `BUSINESS_TIMEZONE`.
+2. Load employees and skip shift/employee pairs already recorded in `outreach`.
+3. The agent sends one WhatsApp offer per employee listing their new urgent shifts. Successful sends are recorded in `outreach`.
+4. For local development, add `SSRF_ALLOWED_HOSTS=localhost` to `apps/openwa/.env` and restart OpenWA so it allows the local callback. OpenWA forwards employee replies to `POST http://localhost:4111/whatsapp/incoming` (subscribe to `message.received`). Configure this URL in the session's webhook settings. OpenWA must be able to reach the Mastra host.
+5. The agent continues the conversation using one memory thread per employee. Questions and ambiguous acceptance keep the conversation active. Explicit acceptance of a specific shift updates `employee_id` and status to `not available`, then sends confirmation and closes the conversation. An explicit refusal sends a brief thank-you and closes it without assigning a shift. Later messages for a closed conversation are ignored; a new day’s outreach can start a new conversation. If someone else fills the selected shift first, the employee is asked about another shift.
+6. The reply endpoint sends the agent's final response back through OpenWA.
+
+## Database
+
+The application creates `.data/shifts.db` automatically. This is separate from Mastra's memory database. Set `SHIFTS_DATABASE_URL` (and optionally `SHIFTS_DATABASE_AUTH_TOKEN`) to use a shared libSQL database instead. Use an absolute file URL when sharing a local file with another application.
+
+Tables:
+
+- `employees`: `id`, `phone_number`, `name`
+- `shifts`: `id`, `start_at`, `end_at`, `status`, `employee_id`
+- `outreach`: `shift_id`, `employee_id`, `sent_at`
+- `shift_conversations`: `employee_id`, `offer_date`, `status` (`active`, `assigned`, `declined`)
+- `whatsapp_messages`: processed inbound message IDs to suppress duplicate replies
+
+IDs are strings. Store timestamps as ISO 8601 with a timezone, e.g. `2026-11-16T09:00:00+09:00`. Store employee phone numbers with country codes. No employees or shifts are seeded automatically, so startup does not contact anyone until you add records.
+
+Example SQL (replace the phone number and dates with your demo employee and tomorrow's date):
+
+```sql
+INSERT INTO employees (id, phone_number, name)
+VALUES ('employee-1', '+COUNTRY_CODE_AND_NUMBER', 'Alex');
+INSERT INTO shifts (id, start_at, end_at, status, employee_id)
+VALUES ('shift-1', '2026-11-16T09:00:00+09:00', '2026-11-16T17:00:00+09:00', 'available', NULL);
+```
+
+To repeat outreach for a demo, delete the relevant `outreach` rows. Previously offered shifts otherwise remain suppressed across restarts. Delivery and recording are separate operations; this MVP does not guarantee exactly-once messaging if a process stops between them.
+
+## Files
+
+- `src/mastra/agents/agent.ts`: coordinator prompt, model, memory, tools
+- `src/mastra/tools/shift-tools.ts`: find urgent shifts, send WhatsApp message, assign shift
+- `src/mastra/workflows/urgent-shifts.ts`: scan and outreach steps
+- `src/mastra/lib/database.ts`: tables and queries
+- `src/mastra/lib/whatsapp.ts`: OpenWA sending
+- `src/mastra/lib/conversations.ts`: inbound messages, structured decisions, assignment, and conversation closure
+- `src/mastra/index.ts`: registration, incoming webhook, polling loop
 
 ## OpenWA local app
 
@@ -49,6 +81,7 @@ npm run dev:openwa
 
 OpenWA requires Node.js >=22.19. On first startup it generates local configuration and saves the admin API key in `apps/openwa/data/.api-key`. Use it to sign in to the dashboard; do not commit or share it. Environment files, session data, and dependencies are excluded by the application's `.gitignore`.
 
+Mastra runs separately with `npm run dev`; configure its integration as described above. OpenWA is an unofficial WhatsApp gateway: use a dedicated test number because account restrictions are possible.
 Mastra runs separately with `npm run dev`. OpenWA is an unofficial WhatsApp gateway: use a dedicated test number because account restrictions are possible.
 
 ## Turno: mobile-first shift management

@@ -1,5 +1,28 @@
 import { createTool } from '@mastra/core/tools';
 import { z } from 'zod';
+import { assignShift, findUrgentShifts } from '../lib/database';
+import { sendWhatsAppMessage } from '../lib/whatsapp';
+
+export const findUrgentShiftsTool = createTool({
+  id: 'find-urgent-shifts',
+  description: 'Find unassigned available shifts starting tomorrow in the business timezone.',
+  inputSchema: z.object({}),
+  execute: async () => findUrgentShifts(),
+});
+export const sendWhatsAppMessageTool = createTool({
+  id: 'send-whatsapp-message',
+  description: 'Send an employee a WhatsApp offer and record offered shifts to prevent repeated outreach.',
+  inputSchema: z.object({ employee_id: z.string(), message: z.string(), shift_ids: z.array(z.string()).default([]) }),
+  execute: async ({ employee_id, message, shift_ids }) => sendWhatsAppMessage(employee_id, message, shift_ids),
+});
+export const assignShiftTool = createTool({
+  id: 'assign-shift',
+  description: 'Assign a shift after explicit employee acceptance. Returns assigned false if no longer available.',
+  inputSchema: z.object({ shift_id: z.string(), employee_id: z.string() }),
+  execute: async ({ shift_id, employee_id }) => assignShift(shift_id, employee_id),
+});
+
+// Admin tools used by the separate, unregistered admin agent.
 import { timingSafeEqual } from 'node:crypto';
 import { setting } from '../../../packages/db';
 

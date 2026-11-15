@@ -32,6 +32,7 @@
     "node": ">=22.13.0"
   },
   "dependencies": {
+    "@libsql/client": "^0.18.0",
     "@daytona/sdk": "^0.231.1",
     "@mastra/core": "1.83.0",
     "@mastra/duckdb": "1.19.0",
