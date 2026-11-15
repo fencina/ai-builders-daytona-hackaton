@@ -32,6 +32,25 @@ Select **Agent** in Mastra Studio and try one of these prompts:
 
 The agent asks for approval before it changes files or runs commands. When it creates a schedule, it returns an ID that you can use to pause the schedule.
 
+## OpenWA local app
+
+OpenWA is included as an independent application in `apps/openwa/`, with its own dependencies and configuration. Its source is integrated into this repository, not managed as a Git submodule. Upstream: https://github.com/rmyndharis/OpenWA (the upstream MIT license is preserved in the application directory).
+
+From the repository root:
+
+```shell
+npm run install:openwa
+npm run dev:openwa
+```
+
+- Dashboard: http://localhost:2886
+- API: http://localhost:2785/api
+- Swagger: http://localhost:2785/api/docs
+
+OpenWA requires Node.js >=22.19. On first startup it generates local configuration and saves the admin API key in `apps/openwa/data/.api-key`. Use it to sign in to the dashboard; do not commit or share it. Environment files, session data, and dependencies are excluded by the application's `.gitignore`.
+
+Mastra runs separately with `npm run dev`; no WhatsApp integration with the agent is configured yet. OpenWA is an unofficial WhatsApp gateway: use a dedicated test number because account restrictions are possible.
+
 ## Workspace safety
 
 The local filesystem tools stay inside the `workspace/` directory, which resolves relative to the server's working directory (`src/mastra/public/workspace/` during `mastra dev`). Shell commands start in that directory, but `LocalSandbox` does not provide operating-system isolation by default. Review command approvals carefully, and do not expose this template through an unauthenticated public server.

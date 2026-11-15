@@ -6,6 +6,8 @@
   "private": true,
   "scripts": {
     "dev": "mastra dev",
+    "dev:openwa": "npm --prefix apps/openwa run dev",
+    "install:openwa": "npm --prefix apps/openwa install",
     "build": "mastra build",
     "start": "mastra start"
   },
