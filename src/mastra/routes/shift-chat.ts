@@ -15,7 +15,7 @@ export const shiftChatRoute=registerApiRoute('/internal/shift-chat',{
     try{
       const requestContext=new RequestContext();
       requestContext.set('shift-admin-token',await setting('internal_token'));
-      const response=await c.get('mastra').getAgent('shiftAgent').generate([
+      const response=await c.get('mastra').getAgent('adminShiftAgent').generate([
         {role:'system' as const,content:`Fecha actual: ${new Date().toISOString()}.`},
         ...parsed.data.messages.map(m=>m.role==='user'?{role:'user' as const,content:m.content}:{role:'assistant' as const,content:m.content}),
       ],{requestContext});

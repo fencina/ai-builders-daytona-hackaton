@@ -2,7 +2,7 @@ import { Agent } from '@mastra/core/agent';
 import { shiftOverviewTool,shiftSearchTool,shiftDecisionTool } from '../tools/shift-tools';
 
 export const shiftAgent=new Agent({
-  id:'shift-agent',name:'Agente de turnos',
+  id:'admin-shift-agent',name:'Agente de turnos',
   model:'openai/gpt-6.1-sol',
   instructions:`Eres el asistente de turnos de tiendas de conveniencia. Hablas en español, con claridad y brevedad.
   Ayudas al administrador a consultar turnos y empleados, buscar candidatos por WhatsApp y decidir postulaciones.
