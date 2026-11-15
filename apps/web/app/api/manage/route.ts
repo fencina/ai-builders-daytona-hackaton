@@ -4,7 +4,7 @@ import { snapshot } from '../../../../../packages/db';
 export const runtime='nodejs';
 export async function GET() {
   if(!await currentUser()) return Response.json({error:'No autorizado.'},{status:401});
-  return Response.json(snapshot());
+  return Response.json(await snapshot());
 }
 export async function POST(request:Request) {
   const user=await currentUser();

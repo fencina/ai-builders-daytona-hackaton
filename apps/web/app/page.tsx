@@ -9,5 +9,5 @@ export default async function Page({searchParams}:{searchParams:Promise<{authErr
   const params=await searchParams;
   const user=await currentUser();
   if(!user) return <><AuthLanding/><Login initialError={params.authError==='expired'?'El enlace venció o ya fue utilizado. Solicita un enlace nuevo desde Recuperar contraseña.':''}/></>;
-  return <><AuthLanding/><Dashboard initial={snapshot()} username={user.username}/></>;
+  return <><AuthLanding/><Dashboard initial={await snapshot()} username={user.username}/></>;
 }

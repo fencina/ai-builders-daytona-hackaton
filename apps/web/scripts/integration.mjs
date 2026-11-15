@@ -10,18 +10,22 @@ import { setTimeout as delay } from 'node:timers/promises';
 
 const folder=mkdtempSync(path.join(tmpdir(),'turno-integration-'));
 process.env.SHIFTS_DATABASE_PATH=path.join(folder,'app.db');
-const {db,id,snapshot}=await import('../../../packages/db/index.ts');
+const {db,id,snapshot}=await import('../../../packages/db/sqlite.ts');
 const password=randomBytes(18).toString('hex');
 const adminId=id();const email='admin@example.test';
 const user={id:adminId,aud:'authenticated',role:'authenticated',email,email_confirmed_at:new Date().toISOString(),app_metadata:{},user_metadata:{},identities:[],created_at:new Date().toISOString()};
 const otherUser={...user,id:id(),email:'other@example.test',user_metadata:{role:'admin'}};
+const secondAdmin={...user,id:id(),email:'second-admin@example.test'};
+const secondPassword=randomBytes(18).toString('hex');
 const encode=value=>Buffer.from(JSON.stringify(value)).toString('base64url');
 const tokenFor=u=>`${encode({alg:'HS256',typ:'JWT'})}.${encode({sub:u.id,aud:'authenticated',role:'authenticated',email:u.email,iat:Math.floor(Date.now()/1000),exp:Math.floor(Date.now()/1000)+3600})}.test-signature`;
 const accessToken=tokenFor(user);const otherToken=tokenFor(otherUser);
+const secondToken=tokenFor(secondAdmin);
 let revoked=false;
 let activePassword=password;let emailRequests=0;let rateLimited=false;
 const consumedCodes=new Set();const consumedHashes=new Set();
 const session={access_token:accessToken,token_type:'bearer',refresh_token:'test-refresh-token',expires_in:3600,expires_at:Math.floor(Date.now()/1000)+3600,user};
+const secondSession={...session,access_token:secondToken,user:secondAdmin,refresh_token:'second-refresh-token'};
 const authStub=createServer(async(req,res)=>{
   let raw='';for await(const chunk of req)raw+=chunk;const body=raw?JSON.parse(raw):{};
   res.setHeader('Content-Type','application/json');
@@ -32,6 +36,7 @@ const authStub=createServer(async(req,res)=>{
       if(body.auth_code!=='valid-recovery-code'||!body.code_verifier||consumedCodes.has(body.auth_code))return reply(400,{error_code:'flow_state_not_found',msg:'Expired code'});
       consumedCodes.add(body.auth_code);revoked=false;return reply(200,session);
     }
+    if(body.email===secondAdmin.email&&body.password===secondPassword){revoked=false;return reply(200,secondSession);}
     if(body.email!==email||body.password!==activePassword)return reply(400,{error_code:'invalid_credentials',msg:'Invalid credentials'});
     revoked=false;return reply(200,session);
   }
@@ -44,6 +49,7 @@ const authStub=createServer(async(req,res)=>{
     consumedHashes.add(body.token_hash);revoked=false;return reply(200,session);
   }
   if(req.url==='/auth/v1/user'){
+    if(!revoked&&req.headers.authorization===`Bearer ${secondToken}`)return reply(200,secondAdmin);
     if(req.headers.authorization===`Bearer ${otherToken}`)return reply(200,otherUser);
     if(!revoked&&req.headers.authorization===`Bearer ${accessToken}`){
       if(req.method==='PUT'){
@@ -65,7 +71,7 @@ await new Promise(resolve=>stub.listen(0,'127.0.0.1',resolve));
 const probe=createServer();await new Promise(resolve=>probe.listen(0,'127.0.0.1',resolve));const port=probe.address().port;await new Promise(resolve=>probe.close(resolve));
 const base=`http://127.0.0.1:${port}`;const secret=randomBytes(32).toString('hex');
 const child=spawn(process.execPath,['apps/web/node_modules/next/dist/bin/next','start','apps/web','--hostname','127.0.0.1','--port',String(port)],{
-  cwd:process.cwd(),env:{...process.env,APP_ORIGIN:base,ADMIN_USERNAME:'test-admin',SUPABASE_URL:`http://127.0.0.1:${authStub.address().port}`,SUPABASE_PUBLISHABLE_KEY:'test-publishable-key',SUPABASE_ADMIN_EMAIL:email,SUPABASE_ADMIN_USER_ID:adminId,OPENWA_URL:`http://127.0.0.1:${stub.address().port}`,OPENWA_API_KEY:'test-only',OPENWA_WEBHOOK_SECRET:secret},stdio:['ignore','pipe','pipe'],
+  cwd:process.cwd(),env:{...process.env,SHIFTS_STORAGE:'sqlite',APP_ORIGIN:base,ADMIN_USERNAME:'test-admin',SUPABASE_URL:`http://127.0.0.1:${authStub.address().port}`,SUPABASE_PUBLISHABLE_KEY:'test-publishable-key',SUPABASE_ADMIN_EMAIL:email,SUPABASE_ADMIN_USER_ID:adminId,SUPABASE_ADDITIONAL_ADMINS:JSON.stringify([{userId:secondAdmin.id,email:secondAdmin.email,username:'second-admin'}]),OPENWA_URL:`http://127.0.0.1:${stub.address().port}`,OPENWA_API_KEY:'test-only',OPENWA_WEBHOOK_SECRET:secret},stdio:['ignore','pipe','pipe'],
 });
 let logs='';child.stdout.on('data',chunk=>{logs+=chunk;});child.stderr.on('data',chunk=>{logs+=chunk;});
 let cookie='';
@@ -125,6 +131,12 @@ try{
   await operation('decision',{applicationId:application.id,decision:'approved'});assert.equal(snapshot().assignments.length,1);
   await request('/api/auth','DELETE');assert.equal((await request('/api/manage')).status,401);
   cookie='';
+  for(const identifier of ['second-admin',secondAdmin.email]){
+    const secondLogin=await request('/api/auth','POST',{username:identifier,password:secondPassword});assert.equal(secondLogin.status,200);
+    cookie=sessionCookies(secondLogin);assert.equal((await request('/api/manage')).status,200,'additional administrators can access business data');
+    await request('/api/auth','DELETE');cookie='';
+  }
+  cookie='';
   assert.equal((await request('/auth/recover')).status,200,'recovery does not require a password or session');
   const callbackPage=await request('/auth/callback?code=valid-recovery-code');assert.equal(callbackPage.status,200);
   assert.equal(consumedCodes.size,0,'opening or prefetching a link must not consume the code');
@@ -158,6 +170,14 @@ try{
     const {default:puppeteer}=await import('../../openwa/node_modules/puppeteer/lib/puppeteer/puppeteer.js');
     const browser=await puppeteer.launch({headless:true,executablePath:process.env.BROWSER_EXECUTABLE_PATH});
     try{
+      // Table fixtures stay in the isolated test database and never send invitations.
+      const tableStore=id();db().prepare('INSERT INTO shifts_stores VALUES (?,?,?)').run(tableStore,'Sucursal Norte','Test');
+      for(let i=0;i<12;i++){
+        const employeeId=id();const suffix=String(i).padStart(2,'0');
+        db().prepare('INSERT INTO shifts_employees VALUES (?,?,?,?)').run(employeeId,`Álvaro ${suffix}`,`54911999900${suffix}`,i===0?0:1);
+        db().prepare('INSERT INTO shifts_employee_stores VALUES (?,?)').run(employeeId,tableStore);
+        db().prepare('INSERT INTO shifts_turns VALUES (?,?,?,?,?,?,?,?)').run(id(),tableStore,`Reposición ${suffix}`,new Date(Date.now()+(i+2)*86400000).toISOString(),new Date(Date.now()+(i+2)*86400000+3600000).toISOString(),2,i===0?'closed':'open',new Date().toISOString());
+      }
       const page=await browser.newPage();await page.setViewport({width:390,height:844});
       const errors=[];page.on('pageerror',error=>errors.push(error.message));
       await page.goto(base,{waitUntil:'networkidle0'});
@@ -177,6 +197,53 @@ try{
       await page.evaluate(()=>fetch('/api/auth',{method:'DELETE'}));await page.reload({waitUntil:'networkidle0'});
       await page.type('input[name=username]','test-admin');await page.type('input[name=password]',browserPassword);
       await Promise.all([page.waitForNavigation({waitUntil:'networkidle0'}),page.click('form button.primary')]);await page.waitForSelector('.calendar');
+      const openTab=async label=>{await page.evaluate(label=>{Array.from(document.querySelectorAll('.mobile-nav button')).find(b=>b.textContent===label).click();},label);};
+      await openTab('Turnos');await page.waitForSelector('[aria-label="Tabla de turnos"]');
+      assert.equal(await page.$$eval('.management-table tbody tr',rows=>rows.length),10);
+      await page.click('[aria-label="Página siguiente"]');
+      assert.equal(await page.$$eval('.management-table tbody tr',rows=>rows.length),3);
+      await page.type('[aria-label="Buscar turnos"]','reposicion');
+      assert.match(await page.$eval('.table-pagination',e=>e.textContent),/1–10 de 12/,'search resets pagination and ignores accents');
+      await page.select('.table-toolbar select',tableStore);
+      await page.select('.table-toolbar label:nth-child(3) select','closed');
+      assert.equal(await page.$$eval('.management-table tbody tr',rows=>rows.length),1);
+      assert.match(await page.$eval('.management-table tbody',e=>e.textContent),/Cerrado/);
+      await page.select('.table-toolbar label:nth-child(3) select','vacant');
+      assert.match(await page.$eval('.table-pagination',e=>e.textContent),/11 resultados/);
+      await page.click('.table-sort');
+      assert.equal(await page.$eval('.management-table thead th',e=>e.getAttribute('aria-sort')),'descending');
+      assert.match(await page.$eval('.management-table tbody tr',e=>e.textContent),/Reposición 11/);
+      await page.click('.management-table tbody button');await page.waitForSelector('[aria-labelledby="detail-title"]');
+      assert.equal(await page.$eval('#detail-title',e=>e.textContent),'Reposición 11');await page.click('[aria-label="Cerrar detalle"]');
+      const lastShift=snapshot().shifts.find(s=>s.role==='Reposición 11');
+      const setDateFilter=async(index,value)=>page.evaluate(({index,value})=>{
+        const input=document.querySelectorAll('.table-toolbar input[type=date]')[index];
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,value);
+        input.dispatchEvent(new Event('input',{bubbles:true}));
+      },{index,value});
+      const lastShiftDate=await page.evaluate(value=>{const d=new Date(value);return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;},lastShift.starts_at);
+      await setDateFilter(0,lastShiftDate);await setDateFilter(1,lastShiftDate);
+      assert.equal(await page.$$eval('.management-table tbody tr',rows=>rows.length),1,'local date range includes both boundaries');
+      await setDateFilter(0,'');await setDateFilter(1,'');
+      await page.type('[aria-label="Buscar turnos"]',' inexistente');
+      assert.match(await page.$eval('.management-panel .empty',e=>e.textContent),/No hay turnos con estos filtros/);
+      assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'table overflow stays inside its region on mobile');
+      await openTab('Equipo');await page.waitForSelector('[aria-label="Tabla de empleados"]');
+      await page.type('[aria-label="Buscar empleados"]','alvaro');
+      assert.match(await page.$eval('.table-pagination',e=>e.textContent),/12 resultados/);
+      await page.select('.table-toolbar label:nth-child(3) select','inactive');
+      assert.equal(await page.$$eval('.management-table tbody tr',rows=>rows.length),1);
+      assert.match(await page.$eval('.management-table tbody',e=>e.textContent),/Álvaro 00.*Inactivo/);
+      await page.select('.table-toolbar label:nth-child(3) select','active');
+      assert.match(await page.$eval('.table-pagination',e=>e.textContent),/11 resultados/);
+      await page.select('.table-toolbar select',storeId);
+      assert.match(await page.$eval('.management-panel .empty',e=>e.textContent),/No hay empleados con estos filtros/);
+      await page.setViewport({width:1440,height:1000});
+      await page.evaluate(()=>Array.from(document.querySelectorAll('.table-toolbar button')).find(b=>b.textContent==='Limpiar filtros').click());
+      assert.equal(await page.$$eval('.management-table tbody tr',rows=>rows.length),10);
+      assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+      await page.setViewport({width:390,height:844});
+      console.log('PASS management tables: search, accent normalization, store/status filters, sorting, pagination, shift detail, inactive employees and mobile/desktop overflow.');
       const fresh=await browser.newPage();await fresh.setViewport({width:390,height:844});
       await fresh.goto(`${base}/#access_token=${accessToken}&refresh_token=${session.refresh_token}&type=recovery`,{waitUntil:'networkidle0'});
       await fresh.waitForSelector('button.primary');assert.equal(new URL(fresh.url()).pathname,'/auth/callback');assert.equal(new URL(fresh.url()).hash,'');

@@ -6,7 +6,7 @@ import path from 'node:path';
 
 const folder=mkdtempSync(path.join(tmpdir(),'turno-test-'));
 process.env.SHIFTS_DATABASE_PATH=path.join(folder,'test.db');
-const {db,id,now,snapshot,apply,decide,candidates}=await import('./index.ts');
+const {db,id,now,snapshot,apply,decide,candidates}=await import('./sqlite.ts');
 after(()=>{db().close();rmSync(folder,{recursive:true,force:true});});
 const storeId=id();
 db().prepare('INSERT INTO shifts_stores VALUES (?,?,?)').run(storeId,'Tienda de prueba','');

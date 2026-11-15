@@ -18,8 +18,8 @@ for (const name of ['.env.daytona', '.env', 'apps/web/.env.local']) {
   }
 }
 const command = process.argv[2];
-if (!['deploy', 'resume', 'start', 'stop', 'status', 'urls'].includes(command)) {
-  console.error('Usage: scripts/daytona.ts deploy|resume|start|stop|status|urls');
+if (!['deploy', 'resume', 'start', 'stop', 'status', 'urls', 'studio'].includes(command)) {
+  console.error('Usage: scripts/daytona.ts deploy|resume|start|stop|status|urls|studio');
   process.exit(1);
 }
 if (!process.env.DAYTONA_API_KEY) {
@@ -30,7 +30,7 @@ const daytona = new Daytona();
 const statePath = path.join(root, '.daytona/state.json');
 const remoteRoot = '/app/turno';
 class LauncherError extends Error {}
-type State = { id: string; ready?: boolean; urls?: { web: string; openwa: string }; session?: string };
+type State = { id: string; ready?: boolean; urls?: { web: string; openwa: string; mastra?: string }; session?: string };
 let state: State | undefined = existsSync(statePath) ? JSON.parse(readFileSync(statePath, 'utf8')) : undefined;
 function save() {
   mkdirSync(path.dirname(statePath), { recursive: true, mode: 0o700 });
@@ -78,13 +78,15 @@ async function upload(sandbox: Sandbox, source: Buffer, destination: string) {
   await run(sandbox, `python3 -c ${quoted}`, 60);
 }
 async function links(sandbox: Sandbox) {
-  const [web, openwa, openwaPreview] = await Promise.all([
+  const [web, openwa, openwaPreview, mastra] = await Promise.all([
     sandbox.getSignedPreviewUrl(3000, 86400), sandbox.getSignedPreviewUrl(2785, 86400), sandbox.getPreviewLink(2785),
+    sandbox.getSignedPreviewUrl(4111, 86400),
   ]);
-  state!.urls = { web: web.url, openwa: openwa.url }; save();
+  state!.urls = { web: web.url, openwa: openwa.url, mastra: mastra.url }; save();
   await upload(sandbox, Buffer.from(JSON.stringify({
     openwa: openwa.url, origins: [...new Set([new URL(openwaPreview.url).origin, new URL(openwa.url).origin])],
     webOrigin: new URL(web.url).origin,
+    mastra: mastra.url,
   })), `${remoteRoot}/.daytona/links.json`);
   // Do not print bearer links into CI logs. They are available in the ignored local state file.
   console.log('Private preview links saved in .daytona/state.json (valid for 24 hours; do not share publicly).');
@@ -109,7 +111,7 @@ async function start(sandbox: Sandbox) {
       'curl --max-time 4 -fsS http://127.0.0.1:3000/ -o /dev/null && curl --max-time 4 -fsS http://127.0.0.1:4111/api/agents -o /dev/null && curl --max-time 4 -fsS http://127.0.0.1:2785/api/health -o /dev/null && curl --max-time 4 -fsS http://127.0.0.1:2785/ -o /dev/null',
       remoteRoot, undefined, 15);
     if (check.exitCode === 0) {
-      for (const port of [3000, 2785]) {
+      for (const port of [3000, 2785, 4111]) {
         const preview = await sandbox.getPreviewLink(port);
         const response = await fetch(preview.url, {
           headers: { 'X-Daytona-Preview-Token': preview.token }, signal: AbortSignal.timeout(30000),
@@ -117,7 +119,7 @@ async function start(sandbox: Sandbox) {
         await response.body?.cancel();
         if (!response.ok) throw new LauncherError(`External preview on port ${port} returned HTTP ${response.status}.`);
       }
-      console.log('Web, Mastra and OpenWA respond internally; authenticated web/OpenWA previews also respond.'); return;
+      console.log('Web, Mastra Studio and OpenWA respond internally and through authenticated previews.'); return;
     }
     await delay(3000);
   }
@@ -125,7 +127,39 @@ async function start(sandbox: Sandbox) {
 }
 
 try {
-  if (command === 'deploy' || command === 'resume') {
+  if (command === 'studio') {
+    if (!state?.ready) throw new LauncherError('Studio setup requires an existing, fully provisioned sandbox.');
+    const sandbox = await daytona.get(state.id);
+    if (sandbox.state !== 'started') await sandbox.start(180);
+    await upload(sandbox, readFileSync(path.join(root, 'scripts/daytona-runtime.mjs')), `${remoteRoot}/scripts/daytona-runtime.mjs`);
+    // Touch only the host setting in the remote Mastra source, not other local/remote edits.
+    const configure = `from pathlib import Path; p=Path("src/mastra/index.ts"); s=p.read_text(); old="host: '127.0.0.1',"; new="host: process.env.MASTRA_HOST || '127.0.0.1',"; assert old in s or new in s, "Unexpected Mastra host config"; p.write_text(s.replace(old,new))`;
+    await run(sandbox, `python3 -c '${configure.replaceAll("'", "'\\''")}'`, 30);
+    console.log('Stopping supervised services gracefully before rebuilding Mastra with Studio.');
+    const stop = `import os,signal,time,socket
+for entry in os.listdir('/proc'):
+ if not entry.isdigit(): continue
+ try:
+  cmd=open('/proc/'+entry+'/cmdline','rb').read().split(b'\\0')
+  if b'scripts/daytona-runtime.mjs' in cmd and os.readlink('/proc/'+entry+'/cwd')=='/app/turno': os.kill(int(entry),signal.SIGTERM)
+ except (FileNotFoundError,ProcessLookupError,PermissionError): pass
+deadline=time.time()+100
+while time.time()<deadline:
+ active=False
+ for port in (3000,2785,4111):
+  with socket.socket() as sock:
+   sock.settimeout(1)
+   if sock.connect_ex(('127.0.0.1',port))==0: active=True
+ if not active: break
+ time.sleep(1)
+else: raise RuntimeError('Services did not stop; no build was started')
+print('Service ports are free; databases and sessions retained')`;
+    await run(sandbox, `python3 -c '${stop.replaceAll("'", "'\\''")}'`, 120);
+    console.log('Building the native Mastra Studio bundle.');
+    await run(sandbox, 'npm run build -- --studio > .daytona/logs/build-mastra-studio.log 2>&1');
+    await start(sandbox);
+    console.log('Mastra Studio private link saved as urls.mastra in .daytona/state.json.');
+  } else if (command === 'deploy' || command === 'resume') {
     if (command === 'deploy' && state) throw new LauncherError('A sandbox is already recorded in .daytona/state.json. Use daytona:resume for incomplete setup or daytona:start when ready.');
     if (command === 'resume' && (!state || state.ready)) throw new LauncherError('Resume requires a recorded sandbox with incomplete setup. Use daytona:start when ready.');
     if (!process.env.OPENAI_API_KEY) throw new LauncherError('Configure OPENAI_API_KEY before creating the sandbox.');
@@ -172,17 +206,26 @@ try {
     const runtime: Record<string, string> = {
       OPENAI_API_KEY: process.env.OPENAI_API_KEY,
       OPENWA_WEBHOOK_SECRET: process.env.OPENWA_WEBHOOK_SECRET || randomBytes(32).toString('hex'),
-      SHIFTS_DATABASE_PATH: `${remoteRoot}/src/mastra/public/.data/mastra.db`,
       MASTRA_URL: 'http://127.0.0.1:4111', OPENWA_URL: 'http://127.0.0.1:2785',
       ADMIN_USERNAME: process.env.ADMIN_USERNAME || 'messi',
+      SHIFTS_STORAGE: process.env.SHIFTS_STORAGE || 'sqlite',
+      SHIFTS_INTERNAL_TOKEN: process.env.SHIFTS_INTERNAL_TOKEN || randomBytes(32).toString('hex'),
     };
     for(const key of authKeys)runtime[key]=process.env[key]!;
+    if(process.env.SUPABASE_ADDITIONAL_ADMINS)runtime.SUPABASE_ADDITIONAL_ADMINS=process.env.SUPABASE_ADDITIONAL_ADMINS;
+    if (process.env.SHIFTS_STORAGE === 'supabase') {
+      // Business data lives in Postgres; the sandbox no longer needs its local SQLite file.
+      if (!process.env.SUPABASE_SECRET_KEY) throw new LauncherError('Configure SUPABASE_SECRET_KEY to use Supabase storage.');
+      runtime.SUPABASE_SECRET_KEY = process.env.SUPABASE_SECRET_KEY;
+    } else {
+      runtime.SHIFTS_DATABASE_PATH = `${remoteRoot}/src/mastra/public/.data/mastra.db`;
+    }
     if (process.env.SHIFTS_TIMEZONE) runtime.SHIFTS_TIMEZONE = process.env.SHIFTS_TIMEZONE;
     await upload(sandbox, Buffer.from(JSON.stringify(runtime)), `${remoteRoot}/.daytona/runtime.json`);
     await run(sandbox, 'chmod 600 .daytona/runtime.json');
     console.log('Installing dependencies and building all applications; logs stay in the sandbox.');
     await run(sandbox, 'npm ci --include=dev > .daytona/logs/install-root.log 2>&1 && npm --prefix apps/web ci --include=dev > .daytona/logs/install-web.log 2>&1 && npm --prefix apps/openwa ci --include=dev > .daytona/logs/install-openwa.log 2>&1');
-    await run(sandbox, 'npm run build > .daytona/logs/build-mastra.log 2>&1 && npm run build:web > .daytona/logs/build-web.log 2>&1 && npm --prefix apps/openwa run build:all > .daytona/logs/build-openwa.log 2>&1');
+    await run(sandbox, 'npm run build -- --studio > .daytona/logs/build-mastra.log 2>&1 && npm run build:web > .daytona/logs/build-web.log 2>&1 && npm --prefix apps/openwa run build:all > .daytona/logs/build-openwa.log 2>&1');
     state.ready = true; save();
     await start(sandbox);
   } else {

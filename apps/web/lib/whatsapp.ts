@@ -4,7 +4,7 @@ import path from 'node:path';
 import { projectRoot,setting } from '../../../packages/db';
 
 export async function sendWhatsApp(phone:string,text:string) {
-  const session=setting('openwa_session');
+  const session=await setting('openwa_session');
   if(!session || !phone) throw new Error('WhatsApp no está configurado.');
   const key=process.env.OPENWA_API_KEY || readFileSync(path.join(projectRoot,'apps/openwa/data/.api-key'),'utf8').trim();
   const response=await fetch(`${process.env.OPENWA_URL||'http://127.0.0.1:2785'}/api/sessions/${encodeURIComponent(session)}/messages/send-text`,{

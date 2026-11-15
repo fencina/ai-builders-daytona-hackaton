@@ -21,7 +21,7 @@ export const mastra = new Mastra({
   agents: { agent, shiftAgent },
   tools: { startScheduleTool, stopScheduleTool, shiftOverviewTool, shiftSearchTool, shiftDecisionTool },
   server: {
-    host: '127.0.0.1',
+    host: process.env.MASTRA_HOST || '127.0.0.1',
     apiRoutes: [shiftChatRoute],
     middleware: [async (context,next) => {
       // The requested SQLite location is beneath public/. Never serve it as a static asset.

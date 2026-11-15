@@ -55,6 +55,8 @@ Mastra runs separately with `npm run dev`. OpenWA is an unofficial WhatsApp gate
 
 `apps/web/` is a Next.js application with a day/week/month calendar, stores, employees, pending applications, activity log, and an administrator chat. `packages/db/` contains the shared SQLite business rules. No sample employees or shifts are inserted automatically.
 
+The **Turnos** section provides a management table with role/store search, store and coverage-status filters, a local-date range, date sorting, and pages of 10 rows. **Gestionar** opens the existing shift detail for applications and coverage. **Equipo** displays employees in a table with name/phone/store search, store and active/inactive filters, name sorting, and pagination. Both tables scroll horizontally on small screens without widening the page. Creation continues through the existing forms; editing/deletion is not added by these table views.
+
 Requirements: Node.js >=22.19 (the app uses the native `node:sqlite` module), persistent local disk, and one host for all three services.
 
 ```shell
@@ -79,6 +81,8 @@ ADMIN_USERNAME=messi
 ```
 
 Use a publishable key, not `service_role` or a secret API key. There is no browser Supabase client and no public signup screen. `messi` is a server-side alias for the configured email; both the alias and email can be used to log in. Every protected API validates the user with `auth.getUser()` and requires the pinned user ID **and** confirmed email. Other Supabase users do not become administrators. User-editable metadata is never used to grant permissions.
+
+To retain additional administrators, set `SUPABASE_ADDITIONAL_ADMINS` to a JSON array of `{ "userId": "auth-user-uuid", "email": "admin@example.com", "username": "unique-alias" }`. Each account must exist and be confirmed in Supabase Auth. IDs, emails and aliases must be unique across the primary and additional accounts. Access and recovery select the matching identity; adding a Supabase user alone does not grant access. This server-side allowlist is forwarded by the Daytona launcher on deployment; a running deployment must be updated separately to receive changed configuration.
 
 For a new administrator, load the variables above plus `ADMIN_PASSWORD` securely in your shell and run `node --env-file=apps/web/.env.local apps/web/scripts/create-admin.mjs` once. The script uses the Auth signup API, sends the normal email confirmation, and returns the new ID to configure as `SUPABASE_ADMIN_USER_ID`. It does not write to `auth.users` via SQL, bypass confirmation, or overwrite an existing account's password. Never put the password in a committed file. Use a private email inbox for real data; disposable/public inboxes are demo-only.
 
@@ -135,7 +139,7 @@ Redis/Postgres/MinIO and Docker are not required for this single-instance setup.
 2. Run `npm run daytona:deploy`. It creates a sandbox with Node 22, 4 CPU, 8 GiB RAM,
    10 GiB disk, installs dependencies and builds all three applications. Initial provisioning
    can take several minutes. Build and service logs are in `/app/turno/.daytona/logs/`.
-3. Open the `urls.web` and `urls.openwa` links stored in the ignored `.daytona/state.json`.
+3. Open the `urls.web`, `urls.openwa` and `urls.mastra` (Mastra Studio) links stored in the ignored `.daytona/state.json`.
    They are **private bearer links**, valid for 24 hours: do not publish this file or its URLs.
    `npm run daytona:urls` renews both links and the web dashboard's OpenWA shortcut.
 4. Sign in with the configured Supabase administrator. The sandbox receives the publishable key
@@ -146,7 +150,13 @@ Redis/Postgres/MinIO and Docker are not required for this single-instance setup.
    The web reads the key server-side from the same filesystem.
 
 Services communicate over loopback: web `3000`, Mastra `4111`, OpenWA `2785`.
-Only web and OpenWA receive preview links; Mastra stays on `127.0.0.1`.
+All three have private preview links. Mastra includes the native Studio production bundle
+(`npm run build -- --studio`, served with `MASTRA_STUDIO_PATH`) and binds to `0.0.0.0` only
+inside the private sandbox. Local Mastra still defaults to `127.0.0.1`.
+Never make the sandbox public: Studio exposes administrative agent and tool access.
+To enable Studio on a previously deployed sandbox, run `npm run daytona:studio`. It updates
+the runtime, stops services gracefully, rebuilds Mastra with Studio and restarts the stack,
+preserving databases and WhatsApp sessions. Expect a brief service interruption.
 Both web and Mastra use the same absolute `SHIFTS_DATABASE_PATH`.
 The launcher also configures the exact HTTPS preview origins for web CSRF checks and OpenWA
 CORS; it does not trust arbitrary forwarded host headers or use wildcard origins.

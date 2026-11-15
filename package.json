@@ -7,6 +7,7 @@
   "scripts": {
     "daytona:deploy": "node --experimental-strip-types scripts/daytona.ts deploy",
     "daytona:resume": "node --experimental-strip-types scripts/daytona.ts resume",
+    "daytona:studio": "node --experimental-strip-types scripts/daytona.ts studio",
     "daytona:start": "node --experimental-strip-types scripts/daytona.ts start",
     "daytona:stop": "node --experimental-strip-types scripts/daytona.ts stop",
     "daytona:status": "node --experimental-strip-types scripts/daytona.ts status",

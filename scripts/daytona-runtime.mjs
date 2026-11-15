@@ -25,7 +25,9 @@ function shutdown(code) {
   process.exitCode = code;
 }
 for (const [name, cwd, args, extra] of [
-  ['mastra', root, ['run', 'start'], { PORT: '4111', MASTRA_HOST: '127.0.0.1' }],
+  ['mastra', root, ['run', 'start'], {
+    PORT: '4111', MASTRA_HOST: '0.0.0.0', MASTRA_STUDIO_PATH: path.join(root, '.mastra/output/studio'),
+  }],
   ['openwa', path.join(root, 'apps/openwa'), ['run', 'start:prod'], {
     PORT: '2785', SERVE_DASHBOARD: 'true', DATABASE_TYPE: 'sqlite',
     REDIS_ENABLED: 'false', REDIS_BUILTIN: 'false', QUEUE_ENABLED: 'false', CACHE_ENABLED: 'false',

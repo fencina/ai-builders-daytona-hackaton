@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { assertOrigin } from '../../../../lib/auth';
-import { adminConfig } from '../../../../lib/supabase/config';
+import { findAdministrator } from '../../../../lib/supabase/config';
 import { createSupabaseServerClient } from '../../../../lib/supabase/server';
 
 export const runtime='nodejs';
@@ -9,9 +9,9 @@ export async function POST(request:Request){
   try{
     assertOrigin(request);
     const {username,action}=z.object({username:z.string().trim().min(1).max(200),action:z.enum(['recover','resend'])}).parse(await request.json());
-    const admin=adminConfig();const identifier=username.toLowerCase();
+    const admin=findAdministrator(username);
     const message='Si la cuenta corresponde al administrador, recibirás un correo con los próximos pasos. Revisa spam y usa únicamente el último enlace recibido. Mantén este navegador para completar la recuperación.';
-    if(![admin.username.toLowerCase(),admin.email].includes(identifier))return Response.json({message},{headers});
+    if(!admin)return Response.json({message},{headers});
     const supabase=await createSupabaseServerClient();
     // The CSRF check already verified Origin. Never derive a redirect from arbitrary input.
     const origin=process.env.APP_ORIGIN||request.headers.get('origin')!;
