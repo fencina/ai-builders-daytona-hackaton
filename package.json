@@ -5,7 +5,19 @@
   "main": "index.js",
   "private": true,
   "scripts": {
+    "daytona:deploy": "node --experimental-strip-types scripts/daytona.ts deploy",
+    "daytona:resume": "node --experimental-strip-types scripts/daytona.ts resume",
+    "daytona:start": "node --experimental-strip-types scripts/daytona.ts start",
+    "daytona:stop": "node --experimental-strip-types scripts/daytona.ts stop",
+    "daytona:status": "node --experimental-strip-types scripts/daytona.ts status",
+    "daytona:urls": "node --experimental-strip-types scripts/daytona.ts urls",
+    "test:daytona": "node --experimental-strip-types --test scripts/daytona-files.test.ts",
     "dev": "mastra dev",
+    "dev:web": "npm --prefix apps/web run dev",
+    "install:web": "npm --prefix apps/web install",
+    "build:web": "npm --prefix apps/web run build",
+    "test:turnos": "node --experimental-strip-types --test packages/db/domain.test.ts",
+    "test:web": "npm run build:web && node --experimental-strip-types apps/web/scripts/integration.mjs",
     "dev:openwa": "npm --prefix apps/openwa run dev",
     "install:openwa": "npm --prefix apps/openwa install",
     "build": "mastra build",
@@ -19,6 +31,7 @@
     "node": ">=22.13.0"
   },
   "dependencies": {
+    "@daytona/sdk": "^0.231.1",
     "@mastra/core": "1.83.0",
     "@mastra/duckdb": "1.19.0",
     "@mastra/libsql": "1.30.0",
